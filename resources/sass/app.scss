@@ -1,8 +1,4 @@
-// Fonts
-@import url('https://fonts.googleapis.com/css?family=Nunito');
-
-// Variables
-@import 'variables';
-
-// Bootstrap
-@import '~bootstrap/scss/bootstrap';
+@import "home/bootstrap.css";
+@import "home/bootstrap-rtl.min.css";
+@import "home/font-awesome.min.css";
+@import "home/sweetalert.css";

@@ -1,0 +1,145 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Course;
+use App\Learning;
+use App\Payment;
+use Illuminate\Http\Request;
+use SoapClient;
+
+class PaymentController extends Controller
+{
+    public function payment(){
+        if (request()->has('course_id')){
+            $part_id = request()->input('course_id');
+            $part_type = 'App\Course';
+        }
+        else if (request()->has('test_id')){
+            $part_id = request()->input('test_id');
+            $part_type = 'App\Test';
+        }
+        else{
+            alert()->error("مثل اينكه مشكلي پيش آمده . دوباره سعي كنيد .")->persistent("بسيار خوب !");
+            return redirect()->back();
+        }
+
+        $course = $part_type::findOrFail($part_id); // this variable can be course or test
+
+        //TODO check this parts
+        if ($part_type == 'App\Course'){
+            if (auth()->user()->checkLearning($course)){
+                alert()->error('شما قبلا در این دوره ثبت نام کرده اید','دقت کنید')->persistent('خیلی خوب');
+                return back();
+            }
+
+            if ($course->price == 0 || $course->type == 'vip') {
+                alert()->error('این دوره قابل خریداری توسط شما نیست.' , 'دقت کنید')->persistent('خیلی خوب !');
+                return back();
+            }
+        }
+        else if ($part_type == 'App\Test'){
+            if (auth()->user()->checkTestLearning($course)){
+                alert()->error('شما قبلا این تست را خریداری کردید .','دقت کنید')->persistent('خیلی خوب');
+                return back();
+            }
+
+            if ($course->price == 0 || $course->type == 'vip') {
+                alert()->error('این دوره قابل خریداری توسط شما نیست.' , 'دقت کنید')->persistent('خیلی خوب !');
+                return back();
+            }
+        }
+        ////////////////////////////// End checking
+
+        $price = $course->price;
+
+        $Description = ' سایت آموزشی نوین ' . $course->title; // Required
+        $Email = auth()->user()->email; // Optional
+        $CallbackURL = 'http://novin-center.ir/payment/verify'; // Required
+
+        try {
+            $client = new SoapClient('https://www.zarinpal.com/pg/services/WebGate/wsdl', ['encoding' => 'UTF-8']);
+        } catch (\SoapFault $e) {
+            throw $e;
+        }
+
+        $result = $client->PaymentRequest(
+            [
+                'MerchantID' => env('ZARINPAL_MERCHANTID'),
+                'Amount' => $price,
+                'Description' => $Description,
+                'Email' => $Email,
+                'CallbackURL' => $CallbackURL,
+            ]
+        );
+
+        //Redirect to URL You can do it also by creating a form
+        if ($result->Status == 100) {
+            auth()->user()->payments()->create([
+                'resnumber' => $result->Authority,
+                'price' => $price,
+                'course_type' => $part_type,
+                'course_title' => $course->title,
+                'course_id' => $course->id
+        ]);
+
+
+            return redirect('https://www.zarinpal.com/pg/StartPay/'.$result->Authority);
+        } else {
+            echo 'ERR: '.$result->Status;
+        }
+
+    }
+
+    //TODO check in test & course controller that a user buy it or not
+
+
+    public function verify()
+    {
+        $Authority = request('Authority');
+        $payment = Payment::where('resnumber' , $Authority)->firstOrFail();
+        $course = $payment->course_type::findOrFail($payment->course_id);
+        if (request('Status') == 'OK') {
+            $client = new SoapClient('https://www.zarinpal.com/pg/services/WebGate/wsdl', ['encoding' => 'UTF-8']);
+
+            $result = $client->PaymentVerification(
+                [
+                    'MerchantID' => env('ZARINPAL_MERCHANTID'),
+                    'Authority' => $Authority,
+                    'Amount' => $payment->price,
+                ]
+            );
+
+
+            if ($result->Status == 100) {
+                if($this->AddUserForLearning($payment)){
+                    alert()->success('پرداخت با موفقیت انجام شد.' )->persistent('خیلی خوب !');
+                    return redirect($course->path());
+                }
+                echo 'Transaction success. RefID:'.$result->RefID;
+            } else {
+                echo 'Transaction failed. Status:'.$result->Status;
+            }
+        } else {
+            echo 'Transaction canceled by user';
+        }
+
+    }
+
+
+    protected function AddUserForLearning(Payment $payment){
+        $payment->update([
+            'payment' => 1
+        ]);
+
+        $data = [
+            'user_id' => auth()->user()->id,
+            'learningable_id' => $payment->course_id,
+            'learningable_type' => $payment->course_type
+        ];
+        Learning::create($data);
+
+        return true;
+    }
+
+}
